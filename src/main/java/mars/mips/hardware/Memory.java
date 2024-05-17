@@ -351,7 +351,7 @@ public class Memory {
      *         or exceeds available heap storage.
      */
     public int allocateHeapSpace(int numBytes) throws IllegalArgumentException {
-        int result = this.nextHeapAddress;
+        int oldHeapAddress = this.nextHeapAddress;
         if (numBytes < 0) {
             throw new IllegalArgumentException("invalid heap allocation of " + numBytes + " bytes requested");
         }
@@ -360,7 +360,12 @@ public class Memory {
             throw new IllegalArgumentException("heap allocation of " + numBytes + " bytes failed due to insufficient heap space");
         }
         this.nextHeapAddress = newHeapAddress;
-        return result;
+
+        if (Application.isBackSteppingEnabled()) {
+            Application.program.getBackStepper().addCustomBackStep(() -> this.nextHeapAddress -= newHeapAddress - oldHeapAddress);
+        }
+
+        return oldHeapAddress;
     }
 
     /**
@@ -836,11 +841,11 @@ public class Memory {
         else if (isInKernelTextSegment(address)) {
             return this.readProgramStatement(address, kernelTextBaseAddress, kernelTextBlockTable, notify);
         }
-        else if (!Application.getSettings().selfModifyingCodeEnabled.get()) {
-            throw new AddressErrorException("fetch address for text segment out of range ", ExceptionCause.ADDRESS_EXCEPTION_LOAD, address);
+        else if (Application.getSettings().selfModifyingCodeEnabled.get()) {
+            return new ProgramStatement(this.get(address, BYTES_PER_WORD, notify), address);
         }
         else {
-            return new ProgramStatement(this.get(address, BYTES_PER_WORD, notify), address);
+            throw new AddressErrorException("fetch address for text segment out of range ", ExceptionCause.ADDRESS_EXCEPTION_LOAD, address);
         }
     }
 

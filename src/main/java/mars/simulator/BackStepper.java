@@ -126,19 +126,7 @@ public class BackStepper {
                     RegisterFile.setProgramCounter(step.programCounter);
                 }
                 try {
-                    switch (step.action) {
-                        case MEMORY_RESTORE_RAW_WORD -> Application.memory.setRawWord(step.param1, step.param2);
-                        case MEMORY_RESTORE_WORD -> Application.memory.setWord(step.param1, step.param2);
-                        case MEMORY_RESTORE_HALF -> Application.memory.setHalfword(step.param1, step.param2);
-                        case MEMORY_RESTORE_BYTE -> Application.memory.setByte(step.param1, step.param2);
-                        case REGISTER_RESTORE -> RegisterFile.updateRegister(step.param1, step.param2);
-                        case PC_RESTORE -> RegisterFile.setProgramCounter(step.param1);
-                        case COPROC0_REGISTER_RESTORE -> Coprocessor0.updateRegister(step.param1, step.param2);
-                        case COPROC1_REGISTER_RESTORE -> Coprocessor1.updateRegister(step.param1, step.param2);
-                        case COPROC1_CONDITION_CLEAR -> Coprocessor1.clearConditionFlag(step.param1);
-                        case COPROC1_CONDITION_SET -> Coprocessor1.setConditionFlag(step.param1);
-                        case DO_NOTHING -> {}
-                    }
+                    step.action.execute();
                 }
                 catch (AddressErrorException exception) {
                     // If the original action did not cause an exception this will not either.
@@ -168,7 +156,7 @@ public class BackStepper {
      * @param value   The "restore" value to be stored there.
      */
     public void addMemoryRestoreRawWord(int address, int value) {
-        backSteps.push(BackStepAction.MEMORY_RESTORE_RAW_WORD, pc(), address, value);
+        backSteps.push(pc(), () -> Application.memory.setRawWord(address, value));
     }
 
     /**
@@ -179,7 +167,7 @@ public class BackStepper {
      * @param value   The "restore" value to be stored there.
      */
     public void addMemoryRestoreWord(int address, int value) {
-        backSteps.push(BackStepAction.MEMORY_RESTORE_WORD, pc(), address, value);
+        backSteps.push(pc(), () -> Application.memory.setWord(address, value));
     }
 
     /**
@@ -190,7 +178,7 @@ public class BackStepper {
      * @param value   The "restore" value to be stored there, in low order half.
      */
     public void addMemoryRestoreHalf(int address, int value) {
-        backSteps.push(BackStepAction.MEMORY_RESTORE_HALF, pc(), address, value);
+        backSteps.push(pc(), () -> Application.memory.setHalfword(address, value));
     }
 
     /**
@@ -201,7 +189,7 @@ public class BackStepper {
      * @param value   The "restore" value to be stored there, in low order byte.
      */
     public void addMemoryRestoreByte(int address, int value) {
-        backSteps.push(BackStepAction.MEMORY_RESTORE_BYTE, pc(), address, value);
+        backSteps.push(pc(), () -> Application.memory.setByte(address, value));
     }
 
     /**
@@ -212,7 +200,7 @@ public class BackStepper {
      * @param value    The "restore" value to be stored there.
      */
     public void addRegisterFileRestore(int register, int value) {
-        backSteps.push(BackStepAction.REGISTER_RESTORE, pc(), register, value);
+        backSteps.push(pc(), () -> RegisterFile.updateRegister(register, value));
     }
 
     /**
@@ -222,11 +210,11 @@ public class BackStepper {
      * @param value The "restore" value to be stored there.
      */
     public void addPCRestore(int value) {
-        // adjust for value reflecting incremented PC.
-        value -= Instruction.BYTES_PER_INSTRUCTION;
+        // adjust for value reflecting incremented PC..
+        int finalValue = value - Instruction.BYTES_PER_INSTRUCTION;
         // Use "value" insead of "pc()" for second arg because RegisterFile.getProgramCounter()
-        // returns branch target address at this point.
-        backSteps.push(BackStepAction.PC_RESTORE, value, value);
+        // returns branch target address at this point
+        backSteps.push(finalValue, () -> RegisterFile.setProgramCounter(finalValue));
     }
 
     /**
@@ -237,7 +225,7 @@ public class BackStepper {
      * @param value    The "restore" value to be stored there.
      */
     public void addCoprocessor0Restore(int register, int value) {
-        backSteps.push(BackStepAction.COPROC0_REGISTER_RESTORE, pc(), register, value);
+        backSteps.push(pc(), () -> Coprocessor0.updateRegister(register, value));
     }
 
     /**
@@ -248,7 +236,7 @@ public class BackStepper {
      * @param value    The "restore" value to be stored there.
      */
     public void addCoprocessor1Restore(int register, int value) {
-        backSteps.push(BackStepAction.COPROC1_REGISTER_RESTORE, pc(), register, value);
+        backSteps.push(pc(), () -> Coprocessor1.updateRegister(register, value));
     }
 
     /**
@@ -258,7 +246,7 @@ public class BackStepper {
      * @param flag The condition flag number.
      */
     public void addConditionFlagSet(int flag) {
-        backSteps.push(BackStepAction.COPROC1_CONDITION_SET, pc(), flag);
+        backSteps.push(pc(), () -> Coprocessor1.setConditionFlag(flag));
     }
 
     /**
@@ -268,7 +256,17 @@ public class BackStepper {
      * @param flag The condition flag number.
      */
     public void addConditionFlagClear(int flag) {
-        backSteps.push(BackStepAction.COPROC1_CONDITION_CLEAR, pc(), flag);
+        backSteps.push(pc(), () -> Coprocessor1.clearConditionFlag(flag));
+    }
+
+    /**
+     * Add a new "back step" (the undo action) to the stack.  The action here
+     * is provided by the caller (e.g., for syscalls).
+     *
+     * @param action The custom back step action.
+     */
+    public void addCustomBackStep(BackStepAction action) {
+        backSteps.push(pc(), action);
     }
 
     /**
@@ -281,42 +279,28 @@ public class BackStepper {
      */
     public void addDoNothing(int programCounter) {
         if (backSteps.isEmpty() || backSteps.peek().programCounter != programCounter) {
-            backSteps.push(BackStepAction.DO_NOTHING, programCounter);
+            backSteps.push(programCounter, () -> {});
         }
     }
 
-    // The types of "undo" actions.
-    private enum BackStepAction {
-        MEMORY_RESTORE_RAW_WORD,
-        MEMORY_RESTORE_WORD,
-        MEMORY_RESTORE_HALF,
-        MEMORY_RESTORE_BYTE,
-        REGISTER_RESTORE,
-        PC_RESTORE,
-        COPROC0_REGISTER_RESTORE,
-        COPROC1_REGISTER_RESTORE,
-        COPROC1_CONDITION_CLEAR,
-        COPROC1_CONDITION_SET,
-        DO_NOTHING,
+    @FunctionalInterface
+    public interface BackStepAction {
+        void execute() throws AddressErrorException;
     }
 
     // Represents a "back step" (undo action) on the stack.
     private static class BackStep {
-        private BackStepAction action; // what "undo" action to perform
         private int programCounter; // program counter value when original step occurred
-        private int param1; // optional first parameter required by that action
-        private int param2; // optional second parameter required by that action
+        private BackStepAction action; // what "undo" action to perform
         private ProgramStatement statement; // statement whose action is being "undone" here
         private boolean isInDelaySlot; // true if instruction executed in "delay slot" (delayed branching enabled)
 
         // It is critical that BackStep object get its values by calling this method
         // rather than assigning to individual members, because of the technique used
         // to set its ps member (and possibly pc).
-        private void assign(BackStepAction action, int programCounter, int param1, int param2) {
-            this.action = action;
+        private void assign(int programCounter, BackStepAction action) {
             this.programCounter = programCounter;
-            this.param1 = param1;
-            this.param2 = param2;
+            this.action = action;
             try {
                 // Client does not have direct access to program statement, and rather than making all
                 // of them go through the methods below to obtain it, we will do it here.
@@ -371,7 +355,7 @@ public class BackStepper {
             return size == 0;
         }
 
-        private synchronized void push(BackStepAction action, int programCounter, int param1, int param2) {
+        private synchronized void push(int programCounter, BackStepAction action) {
             if (size == 0) {
                 top = 0;
                 size++;
@@ -386,15 +370,7 @@ public class BackStepper {
             }
             // We'll re-use existing objects rather than create/discard each time.
             // Must use assign() method rather than series of assignment statements!
-            stack[top].assign(action, programCounter, param1, param2);
-        }
-
-        private synchronized void push(BackStepAction action, int programCounter, int param1) {
-            push(action, programCounter, param1, 0);
-        }
-
-        private synchronized void push(BackStepAction action, int programCounter) {
-            push(action, programCounter, 0, 0);
+            stack[top].assign(programCounter, action);
         }
 
         // NO PROTECTION.  This class is used only within this file so there is no excuse
